@@ -1,0 +1,137 @@
+tech_branch:
+  id: "screwdriver-press-start"
+  name: "小电动螺丝批-按压启动"
+  level: 1
+  description: "电动螺丝批通过批头/输出轴的按压动作触发电机启动的技术方案"
+
+children:
+  - id: "single-press"
+    name: "单一按压启动"
+    level: 2
+    description: "输出轴被按压时直接启动电机，松开即停，无速度调节"
+    keywords:
+      must_have: []
+      any_of: ["按压启动", "按压触发", "轴端按压", "输出轴按压", "按压启动电机"]
+      exclude: ["速度控制", "转速调节", "多级", "分段"]
+    children:
+      - id: "single-press-mechanical"
+        name: "机械开关触发"
+        level: 3
+        criteria:
+          - "权利要求中描述实体开关元件（机械开关、触点开关、按钮开关、行程开关）"
+          - "按压行程末端触发开关，开关直接控制电机启停"
+          - "无传感器检测元件"
+        keywords: ["机械开关", "触点开关", "按钮开关", "行程开关", "按压触发开关", "实体开关"]
+        boundary_rules:
+          - condition: "同时提及机械开关和传感器"
+            resolution: "优先归入机械开关触发，因为实体开关是主要触发方式"
+        sample_patents: []
+
+      - id: "single-press-sensor"
+        name: "传感器触发"
+        level: 3
+        criteria:
+          - "权利要求中描述传感器检测按压动作（压力传感器、位移传感器、感应元件）"
+          - "传感器信号控制电机启停"
+          - "无实体机械开关"
+        keywords: ["压力传感器", "位移传感器", "感应元件", "传感器检测", "信号触发", "传感器启动"]
+        boundary_rules:
+          - condition: "同时提及传感器和速度控制"
+            resolution: "若速度可调节，归入按压深度控制转速或压力传感器检测分支"
+        sample_patents: []
+
+  - id: "depth-speed-control"
+    name: "按压深度控制转速"
+    level: 2
+    description: "按压深度/力度与转速关联，轻按低速、重按高速"
+    keywords:
+      must_have: []
+      any_of: ["深度控制", "转速控制", "速度调节", "按压调速", "力度调速"]
+      exclude: []
+    children:
+      - id: "depth-displacement-sensor"
+        name: "位移传感器检测"
+        level: 3
+        criteria:
+          - "权利要求中描述位移传感器或位置传感器检测按压深度"
+          - "深度值直接映射转速"
+          - "按压越深转速越高（或对应关系）"
+        keywords: ["位移传感器", "位置传感器", "行程检测", "深度检测", "行程长度", "深度与转速"]
+        boundary_rules:
+          - condition: "同时提及位移传感器和压力传感器"
+            resolution: "根据主要检测方式归类，若以位移为主则归入本分支"
+        sample_patents: []
+
+      - id: "depth-pressure-sensor"
+        name: "压力传感器检测"
+        level: 3
+        criteria:
+          - "权利要求中描述压力传感器检测按压力度"
+          - "力度值映射转速"
+          - "按压力度越大转速越高（或对应关系）"
+        keywords: ["压力传感器", "力度检测", "按压力度", "力度与转速", "压力值", "力度调速"]
+        boundary_rules:
+          - condition: "同时提及压力传感器和位移传感器"
+            resolution: "根据主要检测方式归类，若以压力为主则归入本分支"
+        sample_patents: []
+
+      - id: "depth-mechanical-gear"
+        name: "机械档位切换"
+        level: 3
+        criteria:
+          - "权利要求中描述按压行程中设置多个机械触点"
+          - "不同触点触发不同转速档位"
+          - "档位为离散值（如低速档、高速档）"
+        keywords: ["机械档位", "档位切换", "档位触点", "多档位", "档位开关", "档位转速"]
+        boundary_rules:
+          - condition: "档位数量超过3个"
+            resolution: "归入多段式控制分支"
+        sample_patents: []
+
+  - id: "segmented-press"
+    name: "分段按压控制"
+    level: 2
+    description: "按压行程分段，不同段触发不同转速或功能"
+    keywords:
+      must_have: []
+      any_of: ["分段", "两段", "三段", "多段", "分段控制"]
+      exclude: []
+    children:
+      - id: "segmented-two-stage"
+        name: "两段式控制"
+        level: 3
+        criteria:
+          - "权利要求中描述按压行程分为两段"
+          - "第一段触发低速，第二段触发高速"
+          - "或两段分别触发不同转速档位"
+        keywords: ["两段式", "双段", "第一段低速", "第二段高速", "两段行程", "两段转速"]
+        boundary_rules:
+          - condition: "两段触发不同功能而非转速"
+            resolution: "归入分段功能切换分支"
+        sample_patents: []
+
+      - id: "segmented-multi-stage"
+        name: "多段式控制"
+        level: 3
+        criteria:
+          - "权利要求中描述按压行程分为三段或更多"
+          - "每段对应不同转速或模式"
+          - "段数≥3"
+        keywords: ["三段式", "多段式", "多段行程", "分段转速", "三段以上", "多段控制"]
+        boundary_rules:
+          - condition: "段数为2"
+            resolution: "归入两段式控制分支"
+        sample_patents: []
+
+      - id: "segmented-function-switch"
+        name: "分段功能切换"
+        level: 3
+        criteria:
+          - "权利要求中描述按压行程分段触发不同功能"
+          - "功能包括拧入/拧出、正反转、模式切换等"
+          - "不仅仅是转速变化"
+        keywords: ["分段功能", "拧入拧出", "功能切换", "正反转切换", "模式切换", "分段触发功能"]
+        boundary_rules:
+          - condition: "分段仅控制转速"
+            resolution: "归入两段式控制或多段式控制分支"
+        sample_patents: []
