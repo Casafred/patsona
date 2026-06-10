@@ -203,6 +203,55 @@ def check_rules() -> None:
         console.print(tree_summary)
 
 
+@app.command(name="analyze-claims")
+def analyze_claims(
+    file_path: Optional[Path] = typer.Option(None, "--file", "-f", help="专利文件路径（PDF/DOCX/TXT）"),
+    text: Optional[str] = typer.Option(None, "--text", "-t", help="直接粘贴权利要求文本"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="覆盖默认LLM模型"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="输出文件路径（Markdown格式）"),
+) -> None:
+    """分析独立权利要求：识别独权/从权，对比各独权异同，标识异常独权"""
+    console.print(Panel("[bold blue]独立权利要求分析[/]", title="Patsona 独权分析"))
+
+    # 获取权利要求文本
+    claims_text = ""
+
+    if file_path:
+        if not file_path.exists():
+            console.print(f"[red]文件不存在: {file_path}[/]")
+            raise typer.Exit(1)
+        parser = PatentParser()
+        patent_doc = parser.parse_file(file_path)
+        # 优先使用权利要求，其次使用全文
+        claims_text = "\n".join(patent_doc.claims) if patent_doc.claims else patent_doc.full_text
+    elif text:
+        claims_text = text
+    else:
+        console.print("[red]请通过 --file 或 --text 提供权利要求文本[/]")
+        raise typer.Exit(1)
+
+    if not claims_text.strip():
+        console.print("[red]未获取到有效的权利要求文本[/]")
+        raise typer.Exit(1)
+
+    # 执行分析
+    from patsona.analyzer.claim_analyzer import ClaimAnalyzer
+    from patsona.analyzer.formatter import format_claim_analysis, format_claim_analysis_markdown
+
+    analyzer = ClaimAnalyzer(model_override=model)
+    result = analyzer.analyze(claims_text)
+
+    # 输出结果
+    formatted = format_claim_analysis(result)
+    console.print(formatted)
+
+    # 可选写入文件
+    if output:
+        md_text = format_claim_analysis_markdown(result)
+        Path(output).write_text(md_text, encoding="utf-8")
+        console.print(f"[green]结果已写入 {output}[/]")
+
+
 def _load_rules() -> list:
     """加载分类规则，返回技术分支列表"""
     loader = RuleLoader()
