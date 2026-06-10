@@ -18,6 +18,14 @@ class PromptManager:
         "你需要严格按照指定的JSON格式输出结果。"
     )
 
+    # 独权分析系统角色
+    CLAIM_ANALYZER_ROLE = (
+        "你是一位资深的专利权利要求分析专家，精通专利权利要求的撰写规则和保护范围解读。"
+        "你的任务是：对给定的独立权利要求进行深度分析，提取各独权的保护主题和关键技术特征，"
+        "对比各独权之间的异同，并标识出保护方向明显不同的异常独权。"
+        "你需要严格按照指定的JSON格式输出结果，分析必须基于权利要求的原文，不得臆造。"
+    )
+
     def get_layer2_prompt(
         self,
         patent_doc: PatentDocument,
@@ -154,5 +162,131 @@ class PromptManager:
             abstract = s.get("abstract", "")
             if abstract:
                 lines.append(f"  摘要: {abstract[:150]}...")
+            lines.append("")
+        return "\n".join(lines)
+
+    def get_claim_analysis_prompt(
+        self,
+        independent_claims: list[dict],
+    ) -> list[dict]:
+        """构建独立权利要求分析的 Prompt
+
+        Args:
+            independent_claims: 已识别的独立权利要求列表，
+                每项格式 {"claim_number": int, "text": str}
+
+        Returns:
+            消息列表
+        """
+        claims_desc = self._format_independent_claims(independent_claims)
+        claim_count = len(independent_claims)
+
+        # 根据独权数量调整分析策略提示
+        if claim_count == 1:
+            strategy_hint = (
+                "本专利仅有1条独立权利要求，无需进行独权间的对比分析。"
+                "请专注于提取该独权的保护主题、关键技术特征和保护范围概述。"
+                "comparison字段中标注'仅一条独权，无需对比'即可。"
+            )
+        elif claim_count == 2:
+            strategy_hint = (
+                "本专利有2条独立权利要求，请进行两两对比，"
+                "重点分析两者在保护主题和技术路线上是互补关系还是重叠关系。"
+            )
+        else:
+            strategy_hint = (
+                f"本专利有{claim_count}条独立权利要求，请先找出多数独权的共同保护方向作为基准，"
+                "再逐条对比各独权与基准的偏离程度。"
+                "对于保护主题或技术路线明显偏离基准的独权，必须标记为outlier。"
+            )
+
+        user_content = f"""请对以下独立权利要求进行深度分析。
+
+## 独立权利要求（共{claim_count}条）
+{claims_desc}
+
+## 分析策略
+{strategy_hint}
+
+## 分析要求
+
+### 第一步：逐条解析各独立权利要求
+对每条独立权利要求，提取以下信息：
+1. **protection_subject**（保护主题）：权利要求前序部分定义的保护对象，如"一种电动螺丝批"、"一种控制方法"、"一种存储介质"
+2. **subject_category**（主题类别）：从以下选项中选择最匹配的：
+   - "产品" — 实体装置、设备、器具、系统、组件等
+   - "方法" — 制造方法、控制方法、处理方法、检测方法等
+   - "用途" — 应用用途类权利要求
+   - "介质" — 存储介质、计算机可读介质等
+   - "组合" — 同时包含产品和方法特征的权利要求
+3. **key_features**（关键技术特征）：列出该独权中定义的、构成其保护范围的必要技术特征，每条特征用简练的一句话概括
+4. **technical_problem**（解决的技术问题）：根据权利要求的技术特征推断其解决的技术问题
+5. **protection_scope_summary**（保护范围概述）：用1-2句话概括该独权的保护范围边界
+
+### 第二步：对比分析所有独立权利要求
+1. **common_features**（共同点）：列出各独权之间共享的技术特征、相同的保护方向或技术路线
+2. **differences**（差异点）：逐对比较各独权之间的关键差异，每条差异需指明涉及的权利要求编号
+3. **outlier_claims**（异常独权标识）：对于满足以下任一条件的独权，必须标记为outlier：
+   - 保护主题类别与其他独权不同（如其他独权保护产品，该独权保护方法）
+   - 技术路线/解决手段与其他独权属于不同技术领域
+   - 保护方向与其他独权明显不同，不属于同一发明构思下的并行保护
+   对于每条outlier，需说明差异类型（主题差异/技术路线差异/应用场景差异等）、差异原因、以及该独权独特的保护方向
+
+### 第三步：总体概述
+用2-3句话总结该专利独立权利要求的整体布局策略，包括独权之间的关系（互补/平行/递进等）和保护范围覆盖情况。
+
+## 输出格式
+```json
+{{
+    "independent_claims": [
+        {{
+            "claim_number": 1,
+            "protection_subject": "一种XXX",
+            "subject_category": "产品",
+            "key_features": ["特征1", "特征2", "特征3"],
+            "technical_problem": "解决的技术问题",
+            "protection_scope_summary": "保护范围概述"
+        }}
+    ],
+    "comparison": {{
+        "common_features": ["共同点1", "共同点2"],
+        "differences": [
+            {{
+                "claim_numbers": [1, 5],
+                "difference": "差异描述"
+            }}
+        ],
+        "outlier_claims": [
+            {{
+                "claim_number": 9,
+                "divergence_type": "主题差异",
+                "reason": "差异原因说明",
+                "unique_direction": "该独权独特的保护方向"
+            }}
+        ]
+    }},
+    "summary": "总体分析概述"
+}}
+```
+
+注意：
+- key_features 应提取权利要求中的必要技术特征，而非简单复述原文
+- 如果所有独权保护方向一致，outlier_claims 可以为空数组
+- differences 应涵盖所有值得关注的差异，不要遗漏
+- 分析必须严格基于权利要求原文，不得推测未记载的内容"""
+
+        return [
+            {"role": "system", "content": self.CLAIM_ANALYZER_ROLE},
+            {"role": "user", "content": user_content},
+        ]
+
+    def _format_independent_claims(self, claims: list[dict]) -> str:
+        """格式化独立权利要求描述"""
+        lines: list[str] = []
+        for c in claims:
+            num = c.get("claim_number", "?")
+            text = c.get("text", "")
+            lines.append(f"### 权利要求{num}")
+            lines.append(f"{text}")
             lines.append("")
         return "\n".join(lines)
