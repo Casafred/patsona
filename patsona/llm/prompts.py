@@ -20,8 +20,10 @@ class PromptManager:
 
     # 独权分析系统角色
     CLAIM_ANALYZER_ROLE = (
-        "你是一位资深的专利权利要求分析专家，精通专利权利要求的撰写规则和保护范围解读。"
-        "你的任务是：对给定的独立权利要求进行深度分析，提取各独权的保护主题和关键技术特征，"
+        "你是一位资深的专利权利要求分析专家，精通各国专利权利要求的撰写规则和保护范围解读，"
+        "熟悉中文、英文、日文、韩文等各种语言的专利权利要求表达方式。"
+        "你的任务是：从给定的全部权利要求中识别出独立权利要求和从属权利要求，"
+        "对每条独立权利要求进行深度分析，提取保护主题和关键技术特征，"
         "对比各独权之间的异同，并标识出保护方向明显不同的异常独权。"
         "你需要严格按照指定的JSON格式输出结果，分析必须基于权利要求的原文，不得臆造。"
     )
@@ -167,50 +169,48 @@ class PromptManager:
 
     def get_claim_analysis_prompt(
         self,
-        independent_claims: list[dict],
+        all_claims: list[dict],
     ) -> list[dict]:
-        """构建独立权利要求分析的 Prompt
+        """构建权利要求分析的 Prompt
+
+        传入全部权利要求，由 LLM 识别独权/从权并进行分析。
 
         Args:
-            independent_claims: 已识别的独立权利要求列表，
+            all_claims: 全部权利要求列表，
                 每项格式 {"claim_number": int, "text": str}
 
         Returns:
             消息列表
         """
-        claims_desc = self._format_independent_claims(independent_claims)
-        claim_count = len(independent_claims)
+        claims_desc = self._format_all_claims(all_claims)
+        total_count = len(all_claims)
 
-        # 根据独权数量调整分析策略提示
-        if claim_count == 1:
-            strategy_hint = (
-                "本专利仅有1条独立权利要求，无需进行独权间的对比分析。"
-                "请专注于提取该独权的保护主题、关键技术特征和保护范围概述。"
-                "comparison字段中标注'仅一条独权，无需对比'即可。"
-            )
-        elif claim_count == 2:
-            strategy_hint = (
-                "本专利有2条独立权利要求，请进行两两对比，"
-                "重点分析两者在保护主题和技术路线上是互补关系还是重叠关系。"
-            )
-        else:
-            strategy_hint = (
-                f"本专利有{claim_count}条独立权利要求，请先找出多数独权的共同保护方向作为基准，"
-                "再逐条对比各独权与基准的偏离程度。"
-                "对于保护主题或技术路线明显偏离基准的独权，必须标记为outlier。"
-            )
+        user_content = f"""请对以下权利要求书进行分析，识别独立权利要求与从属权利要求，并对各独立权利要求进行深度分析。
 
-        user_content = f"""请对以下独立权利要求进行深度分析。
-
-## 独立权利要求（共{claim_count}条）
+## 权利要求书（共{total_count}条）
 {claims_desc}
-
-## 分析策略
-{strategy_hint}
 
 ## 分析要求
 
-### 第一步：逐条解析各独立权利要求
+### 第一步：识别独立权利要求和从属权利要求
+
+判断标准：**如果某条权利要求引用了（依赖了）其他权利要求，则为从属权利要求；否则为独立权利要求。**
+
+常见的从属权利要求引用表达（不限语言）：
+- 中文："根据权利要求X所述的"、"如权利要求X所述的"、"按照权利要求X"
+- 英文："according to claim X"、"as recited in claim X"、"of claim X"、"as set forth in claim X"
+- 日文："請求項Xに記載の"、"請求項Xに従う"
+- 韩文："청구항 X에 따른"、"청구항 X에 기재된"
+- 其他语言中任何形式的对其他权利要求的引用
+
+注意：
+- 引用多个权利要求的也是从权（如"根据权利要求1-3所述的"）
+- 仅引用其他权利要求的编号即构成从权，无论引用方式如何
+- 独立权利要求不引用任何其他权利要求，其保护范围自成一体
+
+对每条从属权利要求，需记录其引用的权利要求编号（references）。
+
+### 第二步：逐条解析各独立权利要求
 对每条独立权利要求，提取以下信息：
 1. **protection_subject**（保护主题）：权利要求前序部分定义的保护对象，如"一种电动螺丝批"、"一种控制方法"、"一种存储介质"
 2. **subject_category**（主题类别）：从以下选项中选择最匹配的：
@@ -223,7 +223,7 @@ class PromptManager:
 4. **technical_problem**（解决的技术问题）：根据权利要求的技术特征推断其解决的技术问题
 5. **protection_scope_summary**（保护范围概述）：用1-2句话概括该独权的保护范围边界
 
-### 第二步：对比分析所有独立权利要求
+### 第三步：对比分析所有独立权利要求
 1. **common_features**（共同点）：列出各独权之间共享的技术特征、相同的保护方向或技术路线
 2. **differences**（差异点）：逐对比较各独权之间的关键差异，每条差异需指明涉及的权利要求编号
 3. **outlier_claims**（异常独权标识）：对于满足以下任一条件的独权，必须标记为outlier：
@@ -232,7 +232,7 @@ class PromptManager:
    - 保护方向与其他独权明显不同，不属于同一发明构思下的并行保护
    对于每条outlier，需说明差异类型（主题差异/技术路线差异/应用场景差异等）、差异原因、以及该独权独特的保护方向
 
-### 第三步：总体概述
+### 第四步：总体概述
 用2-3句话总结该专利独立权利要求的整体布局策略，包括独权之间的关系（互补/平行/递进等）和保护范围覆盖情况。
 
 ## 输出格式
@@ -246,6 +246,12 @@ class PromptManager:
             "key_features": ["特征1", "特征2", "特征3"],
             "technical_problem": "解决的技术问题",
             "protection_scope_summary": "保护范围概述"
+        }}
+    ],
+    "dependent_claims": [
+        {{
+            "claim_number": 2,
+            "references": [1]
         }}
     ],
     "comparison": {{
@@ -270,6 +276,7 @@ class PromptManager:
 ```
 
 注意：
+- independent_claims 和 dependent_claims 的编号之和必须等于总权利要求数，不可遗漏
 - key_features 应提取权利要求中的必要技术特征，而非简单复述原文
 - 如果所有独权保护方向一致，outlier_claims 可以为空数组
 - differences 应涵盖所有值得关注的差异，不要遗漏
@@ -280,8 +287,8 @@ class PromptManager:
             {"role": "user", "content": user_content},
         ]
 
-    def _format_independent_claims(self, claims: list[dict]) -> str:
-        """格式化独立权利要求描述"""
+    def _format_all_claims(self, claims: list[dict]) -> str:
+        """格式化全部权利要求描述"""
         lines: list[str] = []
         for c in claims:
             num = c.get("claim_number", "?")

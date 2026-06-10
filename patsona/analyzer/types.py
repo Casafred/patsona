@@ -24,6 +24,16 @@ class IndependentClaim:
 
 
 @dataclass
+class DependentClaimInfo:
+    """从属权利要求信息"""
+
+    # 权利要求编号
+    claim_number: int
+    # 引用的权利要求编号
+    references: list[int] = field(default_factory=list)
+
+
+@dataclass
 class ClaimDifference:
     """权利要求差异描述"""
 
@@ -67,8 +77,8 @@ class ClaimAnalysisResult:
     total_claims: int = 0
     # 独立权利要求列表
     independent_claims: list[IndependentClaim] = field(default_factory=list)
-    # 从属权利要求编号列表
-    dependent_claim_numbers: list[int] = field(default_factory=list)
+    # 从属权利要求信息列表
+    dependent_claims: list[DependentClaimInfo] = field(default_factory=list)
     # 对比分析
     comparison: ClaimComparison = field(default_factory=ClaimComparison)
     # 总体分析概述

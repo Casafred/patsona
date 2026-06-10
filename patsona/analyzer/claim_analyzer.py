@@ -1,10 +1,9 @@
 """独立权利要求分析引擎
 
 流程：
-1. 解析权利要求文本，按编号拆分
-2. 用规则识别独立权利要求（不引用其他权利要求的即为独权）
-3. 将独权文本交给 LLM 进行深度分析
-4. 返回结构化分析结果
+1. 解析权利要求文本，按编号拆分（代码层，仅做机械拆分）
+2. 将全部权利要求交给 LLM，由 LLM 识别独权/从权并深度分析
+3. 返回结构化分析结果
 """
 
 import logging
@@ -15,6 +14,7 @@ from patsona.analyzer.types import (
     ClaimAnalysisResult,
     ClaimComparison,
     ClaimDifference,
+    DependentClaimInfo,
     IndependentClaim,
     OutlierClaim,
 )
@@ -24,27 +24,12 @@ from patsona.llm.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
-# 从权引用模式：匹配"根据权利要求X所述的"、"如权利要求X所述的"、"按照权利要求X"等
-DEPENDENT_CLAIM_PATTERNS = [
-    r"根据权利要求\s*(\d+)\s*所述",
-    r"如权利要求\s*(\d+)\s*所述",
-    r"按照权利要求\s*(\d+)\s*所述",
-    r"根据权利要求\s*(\d+)\s*[～\-至]\s*(\d+)\s*所述",
-    r"如权利要求\s*(\d+)\s*[～\-至]\s*(\d+)\s*所述",
-    r"根据权利要求\s*(\d+)[、，,]\s*(?:权利要求\s*)?(\d+)\s*所述",
-    r"如权利要求\s*(\d+)[、，,]\s*(?:权利要求\s*)?(\d+)\s*所述",
-    r"根据权利?要求\s*(\d+)",
-    r"如权利?要求\s*(\d+)",
-    # 英文专利
-    r"according\s+to\s+claim\s+(\d+)",
-    r"as\s+recited\s+in\s+claim\s+(\d+)",
-    r"of\s+claim\s+(\d+)",
-    r"as\s+set\s+forth\s+in\s+claim\s+(\d+)",
-]
-
 
 def parse_claims_text(claims_text: str) -> list[dict]:
     """将权利要求文本按编号拆分为列表
+
+    仅做机械拆分，不判断独权/从权。
+    独权/从权的识别交给 LLM 处理。
 
     支持格式：
     - "1. 一种..." / "1．一种..." / "1、一种..."
@@ -105,42 +90,11 @@ def parse_claims_text(claims_text: str) -> list[dict]:
     return claims
 
 
-def identify_independent_claims(claims: list[dict]) -> tuple[list[dict], list[int]]:
-    """识别独立权利要求和从属权利要求
-
-    规则：如果某条权利要求引用了其他权利要求，则为从权；否则为独权。
-
-    Args:
-        claims: parse_claims_text 的输出
-
-    Returns:
-        (独立权利要求列表, 从属权利要求编号列表)
-    """
-    independent: list[dict] = []
-    dependent_numbers: list[int] = []
-
-    for claim in claims:
-        text = claim["text"]
-        is_dependent = False
-
-        for pattern in DEPENDENT_CLAIM_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE):
-                is_dependent = True
-                break
-
-        if is_dependent:
-            dependent_numbers.append(claim["claim_number"])
-        else:
-            independent.append(claim)
-
-    return independent, dependent_numbers
-
-
 class ClaimAnalyzer:
     """独立权利要求分析引擎
 
-    1. 代码层：解析权利要求文本，识别独权/从权
-    2. LLM层：对独权进行深度分析（保护主题、技术特征、对比、异常标识）
+    1. 代码层：按编号拆分权利要求文本（仅做机械拆分）
+    2. LLM层：识别独权/从权 + 深度分析独权 + 对比 + 异常标识
     """
 
     def __init__(self, model_override: Optional[str] = None) -> None:
@@ -158,7 +112,7 @@ class ClaimAnalyzer:
         Returns:
             ClaimAnalysisResult 结构化分析结果
         """
-        # Step 1: 解析权利要求
+        # Step 1: 按编号拆分权利要求
         claims = parse_claims_text(claims_text)
         if not claims:
             return ClaimAnalysisResult(
@@ -166,49 +120,30 @@ class ClaimAnalyzer:
                 summary="无法解析权利要求文本，请检查输入格式",
             )
 
-        # Step 2: 识别独权/从权
-        independent, dependent_numbers = identify_independent_claims(claims)
-
-        if not independent:
-            return ClaimAnalysisResult(
-                total_claims=len(claims),
-                dependent_claim_numbers=dependent_numbers,
-                summary="未识别到独立权利要求",
-            )
-
-        # Step 3: 调用 LLM 分析独权
+        # Step 2: 调用 LLM 分析全部权利要求
         try:
-            llm_result = self._llm_analyze(independent)
+            llm_result = self._llm_analyze(claims)
         except Exception as e:
             logger.warning(f"LLM分析失败: {e}")
-            # LLM 失败时，返回基础结果（仅包含代码识别的部分）
             return ClaimAnalysisResult(
                 total_claims=len(claims),
-                independent_claims=[
-                    IndependentClaim(
-                        claim_number=c["claim_number"],
-                        original_text=c["text"],
-                    )
-                    for c in independent
-                ],
-                dependent_claim_numbers=dependent_numbers,
-                summary=f"LLM分析失败，仅完成独权/从权识别: {e}",
+                summary=f"LLM分析失败: {e}",
             )
 
-        # Step 4: 合并结果
-        result = self._build_result(llm_result, independent, len(claims), dependent_numbers)
+        # Step 3: 构建结构化结果
+        result = self._build_result(llm_result, claims)
         return result
 
-    def _llm_analyze(self, independent_claims: list[dict]) -> dict:
-        """调用 LLM 分析独立权利要求
+    def _llm_analyze(self, all_claims: list[dict]) -> dict:
+        """调用 LLM 分析全部权利要求
 
         Args:
-            independent_claims: 独权列表
+            all_claims: 全部权利要求列表
 
         Returns:
             LLM 返回的解析后 JSON 字典
         """
-        messages = self.prompt_manager.get_claim_analysis_prompt(independent_claims)
+        messages = self.prompt_manager.get_claim_analysis_prompt(all_claims)
         response_text = self.llm_client.chat_json(messages, max_tokens=4000)
         parsed = self.output_parser.parse_json(response_text)
         return parsed
@@ -216,23 +151,19 @@ class ClaimAnalyzer:
     def _build_result(
         self,
         llm_result: dict,
-        independent_claims: list[dict],
-        total_claims: int,
-        dependent_numbers: list[int],
+        all_claims: list[dict],
     ) -> ClaimAnalysisResult:
         """将 LLM 输出合并为结构化结果
 
         Args:
             llm_result: LLM 返回的 JSON 字典
-            independent_claims: 原始独权列表
-            total_claims: 权利要求总数
-            dependent_numbers: 从权编号列表
+            all_claims: 原始权利要求列表
 
         Returns:
             ClaimAnalysisResult
         """
-        # 构建独权原文映射
-        text_map = {c["claim_number"]: c["text"] for c in independent_claims}
+        # 构建原文映射
+        text_map = {c["claim_number"]: c["text"] for c in all_claims}
 
         # 解析 independent_claims
         parsed_independent: list[IndependentClaim] = []
@@ -248,17 +179,24 @@ class ClaimAnalyzer:
                 protection_scope_summary=item.get("protection_scope_summary", ""),
             ))
 
-        # 如果 LLM 没有返回某些独权，补充基础信息
-        parsed_numbers = {ic.claim_number for ic in parsed_independent}
-        for c in independent_claims:
-            if c["claim_number"] not in parsed_numbers:
-                parsed_independent.append(IndependentClaim(
-                    claim_number=c["claim_number"],
-                    original_text=c["text"],
-                ))
-
         # 按 claim_number 排序
         parsed_independent.sort(key=lambda x: x.claim_number)
+
+        # 解析 dependent_claims
+        parsed_dependent: list[DependentClaimInfo] = []
+        for item in llm_result.get("dependent_claims", []):
+            claim_num = int(item.get("claim_number", 0))
+            refs = item.get("references", [])
+            if isinstance(refs, list):
+                refs = [int(r) for r in refs]
+            else:
+                refs = [int(refs)]
+            parsed_dependent.append(DependentClaimInfo(
+                claim_number=claim_num,
+                references=refs,
+            ))
+
+        parsed_dependent.sort(key=lambda x: x.claim_number)
 
         # 解析 comparison
         comparison_data = llm_result.get("comparison", {})
@@ -266,7 +204,7 @@ class ClaimAnalyzer:
             common_features=comparison_data.get("common_features", []),
             differences=[
                 ClaimDifference(
-                    claim_numbers=d.get("claim_numbers", []),
+                    claim_numbers=[int(n) for n in d.get("claim_numbers", [])],
                     difference=d.get("difference", ""),
                 )
                 for d in comparison_data.get("differences", [])
@@ -283,9 +221,9 @@ class ClaimAnalyzer:
         )
 
         return ClaimAnalysisResult(
-            total_claims=total_claims,
+            total_claims=len(all_claims),
             independent_claims=parsed_independent,
-            dependent_claim_numbers=sorted(dependent_numbers),
+            dependent_claims=parsed_dependent,
             comparison=comparison,
             summary=llm_result.get("summary", ""),
         )

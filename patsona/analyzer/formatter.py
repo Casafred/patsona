@@ -20,8 +20,9 @@ def format_claim_analysis(result: ClaimAnalysisResult) -> str:
     lines.append("=" * 60)
     lines.append(f"权利要求总数: {result.total_claims}")
     lines.append(f"独立权利要求: {len(result.independent_claims)} 条")
-    if result.dependent_claim_numbers:
-        lines.append(f"从属权利要求: {len(result.dependent_claim_numbers)} 条 ({', '.join(str(n) for n in result.dependent_claim_numbers)})")
+    if result.dependent_claims:
+        dep_nums = [str(d.claim_number) for d in result.dependent_claims]
+        lines.append(f"从属权利要求: {len(result.dependent_claims)} 条 ({', '.join(dep_nums)})")
     lines.append("")
 
     # 逐条独权解析
@@ -46,12 +47,23 @@ def format_claim_analysis(result: ClaimAnalysisResult) -> str:
         if ic.protection_scope_summary:
             lines.append(f"  保护范围概述: {ic.protection_scope_summary}")
 
+    # 从权引用关系
+    if result.dependent_claims:
+        lines.append("")
+        lines.append("-" * 60)
+        lines.append("二、从属权利要求引用关系")
+        lines.append("-" * 60)
+        lines.append("")
+        for dep in result.dependent_claims:
+            refs = ", ".join(str(r) for r in dep.references)
+            lines.append(f"  权利要求{dep.claim_number} → 引用权利要求{refs}")
+
     # 对比分析
     comp = result.comparison
     if comp.common_features or comp.differences or comp.outlier_claims:
         lines.append("")
         lines.append("-" * 60)
-        lines.append("二、独权对比分析")
+        lines.append("三、独权对比分析")
         lines.append("-" * 60)
 
         if comp.common_features:
@@ -83,7 +95,7 @@ def format_claim_analysis(result: ClaimAnalysisResult) -> str:
     if result.summary:
         lines.append("")
         lines.append("-" * 60)
-        lines.append("三、总体概述")
+        lines.append("四、总体概述")
         lines.append("-" * 60)
         lines.append(f"  {result.summary}")
 
@@ -112,8 +124,9 @@ def format_claim_analysis_markdown(result: ClaimAnalysisResult) -> str:
     lines.append("")
     lines.append(f"- 权利要求总数: {result.total_claims}")
     lines.append(f"- 独立权利要求: {len(result.independent_claims)} 条")
-    if result.dependent_claim_numbers:
-        lines.append(f"- 从属权利要求: {len(result.dependent_claim_numbers)} 条 ({', '.join(str(n) for n in result.dependent_claim_numbers)})")
+    if result.dependent_claims:
+        dep_nums = [str(d.claim_number) for d in result.dependent_claims]
+        lines.append(f"- 从属权利要求: {len(result.dependent_claims)} 条 ({', '.join(dep_nums)})")
     lines.append("")
 
     # 逐条独权
@@ -138,6 +151,17 @@ def format_claim_analysis_markdown(result: ClaimAnalysisResult) -> str:
             for feat in ic.key_features:
                 lines.append(f"  - {feat}")
 
+        lines.append("")
+
+    # 从权引用关系
+    if result.dependent_claims:
+        lines.append("## 从属权利要求引用关系")
+        lines.append("")
+        lines.append("| 从属权利要求 | 引用权利要求 |")
+        lines.append("|-------------|-------------|")
+        for dep in result.dependent_claims:
+            refs = ", ".join(str(r) for r in dep.references)
+            lines.append(f"| {dep.claim_number} | {refs} |")
         lines.append("")
 
     # 对比分析
